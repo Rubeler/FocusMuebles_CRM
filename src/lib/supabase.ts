@@ -1,9 +1,27 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ztwplbqtbxryuypqitan.supabase.co'
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0d3BsYnF0YnhyeHV5cHFpdGFuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0NDQxMzMsImV4cCI6MjA5MjAyMDEzM30.I2XugPY5VFY1bgJtkUUeAudV0BIXnaWfsu4BD8-DH0U'
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+// Lazy initialization - don't create client until first use
+let _client: SupabaseClient | null = null
+let _initFailed = false
+
+function getSupabase(): SupabaseClient | null {
+  if (_initFailed) return null
+  if (_client) return _client
+  try {
+    _client = createClient(supabaseUrl, supabaseAnonKey)
+    return _client
+  } catch {
+    _initFailed = true
+    return null
+  }
+}
+
+export function getSupabaseClient(): SupabaseClient | null {
+  return getSupabase()
+}
 
 /**
  * Check if Supabase is reachable and tables exist.
@@ -11,7 +29,9 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey)
  */
 export async function isSupabaseReady(): Promise<boolean> {
   try {
-    const { error } = await supabase.from('leads').select('id').limit(1)
+    const client = getSupabase()
+    if (!client) return false
+    const { error } = await client.from('leads').select('id').limit(1)
     return !error
   } catch {
     return false

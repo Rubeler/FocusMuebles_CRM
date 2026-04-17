@@ -1,15 +1,13 @@
 import { Lead, CalendarEvent, ContactSubmission } from "./types";
 import { seedLeads, seedEvents } from "./seed-data";
 import {
-  supabase,
+  getSupabaseClient,
   isSupabaseReady,
   leadToRow,
   rowToLead,
   eventToRow,
   rowToEvent,
 } from "./supabase";
-
-// ─── localStorage helpers (fallback) ──────────────────────────
 
 const LEADS_KEY = "focusmuebles_leads";
 const EVENTS_KEY = "focusmuebles_events";
@@ -33,25 +31,30 @@ function setItem<T>(key: string, value: T): void {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
-// ─── Connection status ────────────────────────────────────────
+let _sbReady: boolean | null = null;
 
-let _supabaseReady: boolean | null = null;
-
-export async function checkSupabaseStatus(): Promise<boolean> {
-  if (_supabaseReady !== null) return _supabaseReady;
-  _supabaseReady = await isSupabaseReady();
-  return _supabaseReady;
+async function sb(): Promise<ReturnType<typeof getSupabaseClient>> {
+  if (_sbReady === false) return null;
+  if (_sbReady === true) return getSupabaseClient();
+  const ok = await isSupabaseReady();
+  _sbReady = ok;
+  return ok ? getSupabaseClient() : null;
 }
 
-export function resetSupabaseStatus(): void {
-  _supabaseReady = null;
+function sbFail() { _sbReady = false; }
+
+export async function checkSupabaseStatus(): Promise<boolean> {
+  const client = await sb();
+  return client !== null;
 }
 
 export function isUsingSupabase(): boolean {
-  return _supabaseReady === true;
+  return _sbReady === true;
 }
 
-// ─── Seed data (localStorage only) ────────────────────────────
+export function resetSupabaseStatus(): void {
+  _sbReady = null;
+}
 
 export function seedDataIfEmpty(): void {
   if (typeof window === "undefined") return;
@@ -66,54 +69,41 @@ export function seedDataIfEmpty(): void {
 // ─── Leads ────────────────────────────────────────────────────
 
 export async function getLeads(): Promise<Lead[]> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from("leads")
         .select("*")
         .order("created_at", { ascending: true });
-      if (!error && data) {
-        return data.map((row) => rowToLead(row));
-      }
-    } catch {
-      _supabaseReady = false;
-    }
+      if (!error && data) return data.map((row) => rowToLead(row));
+    } catch { sbFail(); }
   }
   return getItem<Lead[]>(LEADS_KEY, seedLeads);
 }
 
 export async function saveLeads(leads: Lead[]): Promise<void> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      // Upsert all leads: delete existing and re-insert
-      // For performance, we use upsert
-      const rows = leads.map(leadToRow);
-      const { error } = await supabase
+      const { error } = await client
         .from("leads")
-        .upsert(rows, { onConflict: "id" });
+        .upsert(leads.map(leadToRow), { onConflict: "id" });
       if (error) throw error;
       return;
-    } catch {
-      _supabaseReady = false;
-    }
+    } catch { sbFail(); }
   }
   setItem(LEADS_KEY, leads);
 }
 
 export async function addLead(lead: Lead): Promise<void> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      const { error } = await supabase
-        .from("leads")
-        .insert(leadToRow(lead));
+      const { error } = await client.from("leads").insert(leadToRow(lead));
       if (error) throw error;
       return;
-    } catch {
-      _supabaseReady = false;
-    }
+    } catch { sbFail(); }
   }
   const leads = getItem<Lead[]>(LEADS_KEY, seedLeads);
   leads.push(lead);
@@ -121,10 +111,10 @@ export async function addLead(lead: Lead): Promise<void> {
 }
 
 export async function updateLead(updatedLead: Lead): Promise<void> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      const { error } = await supabase
+      const { error } = await client
         .from("leads")
         .update({
           name: updatedLead.name,
@@ -139,9 +129,7 @@ export async function updateLead(updatedLead: Lead): Promise<void> {
         .eq("id", updatedLead.id);
       if (error) throw error;
       return;
-    } catch {
-      _supabaseReady = false;
-    }
+    } catch { sbFail(); }
   }
   const leads = getItem<Lead[]>(LEADS_KEY, seedLeads).map((l) =>
     l.id === updatedLead.id ? updatedLead : l
@@ -150,15 +138,13 @@ export async function updateLead(updatedLead: Lead): Promise<void> {
 }
 
 export async function deleteLead(id: string): Promise<void> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      const { error } = await supabase.from("leads").delete().eq("id", id);
+      const { error } = await client.from("leads").delete().eq("id", id);
       if (error) throw error;
       return;
-    } catch {
-      _supabaseReady = false;
-    }
+    } catch { sbFail(); }
   }
   const leads = getItem<Lead[]>(LEADS_KEY, seedLeads).filter((l) => l.id !== id);
   setItem(LEADS_KEY, leads);
@@ -167,52 +153,41 @@ export async function deleteLead(id: string): Promise<void> {
 // ─── Events ───────────────────────────────────────────────────
 
 export async function getEvents(): Promise<CalendarEvent[]> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from("events")
         .select("*")
         .order("date", { ascending: true });
-      if (!error && data) {
-        return data.map((row) => rowToEvent(row));
-      }
-    } catch {
-      _supabaseReady = false;
-    }
+      if (!error && data) return data.map((row) => rowToEvent(row));
+    } catch { sbFail(); }
   }
   return getItem<CalendarEvent[]>(EVENTS_KEY, seedEvents);
 }
 
 export async function saveEvents(events: CalendarEvent[]): Promise<void> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      const rows = events.map(eventToRow);
-      const { error } = await supabase
+      const { error } = await client
         .from("events")
-        .upsert(rows, { onConflict: "id" });
+        .upsert(events.map(eventToRow), { onConflict: "id" });
       if (error) throw error;
       return;
-    } catch {
-      _supabaseReady = false;
-    }
+    } catch { sbFail(); }
   }
   setItem(EVENTS_KEY, events);
 }
 
 export async function addEvent(event: CalendarEvent): Promise<void> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      const { error } = await supabase
-        .from("events")
-        .insert(eventToRow(event));
+      const { error } = await client.from("events").insert(eventToRow(event));
       if (error) throw error;
       return;
-    } catch {
-      _supabaseReady = false;
-    }
+    } catch { sbFail(); }
   }
   const events = getItem<CalendarEvent[]>(EVENTS_KEY, seedEvents);
   events.push(event);
@@ -220,10 +195,10 @@ export async function addEvent(event: CalendarEvent): Promise<void> {
 }
 
 export async function updateEvent(updatedEvent: CalendarEvent): Promise<void> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      const { error } = await supabase
+      const { error } = await client
         .from("events")
         .update({
           title: updatedEvent.title,
@@ -237,9 +212,7 @@ export async function updateEvent(updatedEvent: CalendarEvent): Promise<void> {
         .eq("id", updatedEvent.id);
       if (error) throw error;
       return;
-    } catch {
-      _supabaseReady = false;
-    }
+    } catch { sbFail(); }
   }
   const events = getItem<CalendarEvent[]>(EVENTS_KEY, seedEvents).map((e) =>
     e.id === updatedEvent.id ? updatedEvent : e
@@ -248,15 +221,13 @@ export async function updateEvent(updatedEvent: CalendarEvent): Promise<void> {
 }
 
 export async function deleteEvent(id: string): Promise<void> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      const { error } = await supabase.from("events").delete().eq("id", id);
+      const { error } = await client.from("events").delete().eq("id", id);
       if (error) throw error;
       return;
-    } catch {
-      _supabaseReady = false;
-    }
+    } catch { sbFail(); }
   }
   const events = getItem<CalendarEvent[]>(EVENTS_KEY, seedEvents).filter(
     (e) => e.id !== id
@@ -267,97 +238,72 @@ export async function deleteEvent(id: string): Promise<void> {
 // ─── Workshop Settings ────────────────────────────────────────
 
 export async function getWorkshopName(): Promise<string> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      // Try to get any workshop config (use a generic key)
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from("workshop_config")
         .select("name")
         .eq("user_id", "global")
         .single();
-      if (!error && data) {
-        return (data.name as string) || "Muebles y Diseño";
-      }
-      // If not found, return default (don't insert here)
-      if (error && error.code === "PGRST116") {
-        return "Muebles y Diseño";
-      }
-    } catch {
-      _supabaseReady = false;
-    }
+      if (!error && data) return (data.name as string) || "Muebles y Diseño";
+      if (error && error.code === "PGRST116") return "Muebles y Diseño";
+    } catch { sbFail(); }
   }
   return getItem<string>(WORKSHOP_NAME_KEY, "Muebles y Diseño");
 }
 
 export async function saveWorkshopName(name: string): Promise<void> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      const { error } = await supabase
+      const { error } = await client
         .from("workshop_config")
         .upsert({ user_id: "global", name }, { onConflict: "user_id" });
       if (error) throw error;
       return;
-    } catch {
-      _supabaseReady = false;
-    }
+    } catch { sbFail(); }
   }
   setItem(WORKSHOP_NAME_KEY, name);
 }
 
 export async function getWorkshopLogo(): Promise<string> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from("workshop_config")
         .select("logo")
         .eq("user_id", "global")
         .single();
-      if (!error && data) {
-        return (data.logo as string) || "";
-      }
-      if (error && error.code === "PGRST116") {
-        return "";
-      }
-    } catch {
-      _supabaseReady = false;
-    }
+      if (!error && data) return (data.logo as string) || "";
+      if (error && error.code === "PGRST116") return "";
+    } catch { sbFail(); }
   }
   return getItem<string>(WORKSHOP_LOGO_KEY, "");
 }
 
 export async function saveWorkshopLogo(logo: string): Promise<void> {
-  const ready = await checkSupabaseStatus();
-  if (ready) {
+  const client = await sb();
+  if (client) {
     try {
-      // First check if record exists
-      const { data: existing } = await supabase
+      const { data: existing } = await client
         .from("workshop_config")
         .select("user_id")
         .eq("user_id", "global")
         .single();
-
       if (existing) {
-        await supabase
-          .from("workshop_config")
-          .update({ logo })
-          .eq("user_id", "global");
+        await client.from("workshop_config").update({ logo }).eq("user_id", "global");
       } else {
-        await supabase
-          .from("workshop_config")
-          .insert({ user_id: "global", name: "Muebles y Diseño", logo });
+        await client.from("workshop_config").insert({ user_id: "global", name: "Muebles y Diseño", logo });
       }
       return;
-    } catch {
-      _supabaseReady = false;
-    }
+    } catch { sbFail(); }
   }
   setItem(WORKSHOP_LOGO_KEY, logo);
 }
 
-// ─── Contact Submissions (localStorage only for now) ──────────
+// ─── Contact Submissions (localStorage only) ──────────────────
 
 export function getContactSubmissions(): ContactSubmission[] {
   return getItem<ContactSubmission[]>(CONTACTS_KEY, []);

@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { supabase, isSupabaseReady, userToRow, rowToUser } from "./supabase";
+import { getSupabaseClient, isSupabaseReady, userToRow, rowToUser } from "./supabase";
 
 export interface User {
   id: string;
@@ -51,8 +51,6 @@ const DEFAULT_ADMIN: User = {
   createdAt: new Date().toISOString().slice(0, 10),
 };
 
-// ─── localStorage helpers ─────────────────────────────────────
-
 function getItem<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
   try {
@@ -80,21 +78,12 @@ function seedAdmin(): void {
   setItem(USERS_KEY, users);
 }
 
-// ─── Supabase status tracking ─────────────────────────────────
-
 let _supabaseReady: boolean | null = null;
-
-async function checkAuthSupabaseStatus(): Promise<boolean> {
-  if (_supabaseReady !== null) return _supabaseReady;
-  _supabaseReady = await isSupabaseReady();
-  return _supabaseReady;
-}
 
 const emptySubscribe = () => () => {};
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
-
   const isClient = useSyncExternalStore(emptySubscribe, () => true, () => false);
 
   const [users, setUsers] = useState<User[]>(() => {
@@ -107,95 +96,75 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const sessionInitialized = useRef(false);
 
-  // Initialize session on mount
   useEffect(() => {
     if (sessionInitialized.current) return;
     sessionInitialized.current = true;
-    const id = requestAnimationFrame(() => {
-      seedAdmin();
-      const stored = getItem<User | null>(CURRENT_USER_KEY, null);
-      if (stored) {
-        setCurrentUser(stored);
-      }
-      // Check Supabase status in background (non-blocking)
-      checkAuthSupabaseStatus().catch(() => { _supabaseReady = false; });
-      // Always set loading to false quickly
-      setTimeout(() => setLoading(false), 500);
-    });
-    return () => cancelAnimationFrame(id);
-  }, [isClient]);
 
-  // Sync users from Supabase when ready
-  useEffect(() => {
-    if (!isClient || _supabaseReady !== true) return;
+    seedAdmin();
+    const stored = getItem<User | null>(CURRENT_USER_KEY, null);
+    if (stored) setCurrentUser(stored);
 
-    const loadUsers = async () => {
+    // Check Supabase in background (non-blocking, with timeout)
+    const timer = setTimeout(() => setLoading(false), 800);
+
+    (async () => {
       try {
-        const { data, error } = await supabase
-          .from("users")
-          .select("*")
-          .order("created_at", { ascending: true });
-        if (!error && data && data.length > 0) {
-          const supabaseUsers = data.map(rowToUser);
-          setUsers(supabaseUsers);
-          // Update localStorage to keep in sync
-          setItem(USERS_KEY, supabaseUsers);
+        const ok = await isSupabaseReady();
+        _supabaseReady = ok;
+        if (ok) {
+          const client = getSupabaseClient();
+          if (client) {
+            const { data, error } = await client.from("users").select("*").order("created_at", { ascending: true });
+            if (!error && data && data.length > 0) {
+              const supabaseUsers = data.map(rowToUser);
+              setUsers(supabaseUsers);
+              setItem(USERS_KEY, supabaseUsers);
+            }
+          }
         }
       } catch {
         _supabaseReady = false;
       }
-    };
-
-    loadUsers();
+      clearTimeout(timer);
+      setLoading(false);
+    })();
   }, [isClient]);
 
   const login = useCallback(
     async (email: string, password: string) => {
       seedAdmin();
 
-      // Try Supabase first
+      // Try Supabase
       if (_supabaseReady === true) {
         try {
-          const { data, error } = await supabase
-            .from("users")
-            .select("*")
-            .eq("email", email)
-            .eq("password", password)
-            .single();
-
-          if (!error && data) {
-            const user = rowToUser(data);
-            setCurrentUser(user);
-            setItem(CURRENT_USER_KEY, user);
-
-            if (user.role === "admin") {
-              router.push("/admin");
-            } else {
-              router.push("/crm");
+          const client = getSupabaseClient();
+          if (client) {
+            const { data, error } = await client
+              .from("users")
+              .select("*")
+              .eq("email", email)
+              .eq("password", password)
+              .single();
+            if (!error && data) {
+              const user = rowToUser(data);
+              setCurrentUser(user);
+              setItem(CURRENT_USER_KEY, user);
+              router.push(user.role === "admin" ? "/admin" : "/crm");
+              return { success: true };
             }
-            return { success: true };
           }
         } catch {
           _supabaseReady = false;
         }
       }
 
-      // Fallback to localStorage
+      // Fallback localStorage
       const currentUsers = getItem<User[]>(USERS_KEY, []);
-      const user = currentUsers.find(
-        (u) => u.email === email && u.password === password
-      );
-      if (!user) {
-        return { success: false, error: "Correo o contraseña incorrectos" };
-      }
+      const user = currentUsers.find((u) => u.email === email && u.password === password);
+      if (!user) return { success: false, error: "Correo o contraseña incorrectos" };
       setCurrentUser(user);
       setItem(CURRENT_USER_KEY, user);
-
-      if (user.role === "admin") {
-        router.push("/admin");
-      } else {
-        router.push("/crm");
-      }
+      router.push(user.role === "admin" ? "/admin" : "/crm");
       return { success: true };
     },
     [users, router]
@@ -203,30 +172,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     setCurrentUser(null);
-    if (typeof window !== "undefined") {
-      localStorage.removeItem(CURRENT_USER_KEY);
-    }
+    if (typeof window !== "undefined") localStorage.removeItem(CURRENT_USER_KEY);
     router.push("/login");
   }, [router]);
 
   const register = useCallback(
     async (userData: { email: string; password: string; name: string }) => {
       const { email, password, name } = userData;
-
-      if (!email || !password || !name) {
-        return { success: false, error: "Todos los campos son obligatorios" };
-      }
-
-      if (password.length < 4) {
-        return {
-          success: false,
-          error: "La contraseña debe tener al menos 4 caracteres",
-        };
-      }
-
-      if (users.some((u) => u.email === email)) {
-        return { success: false, error: "Este correo ya está registrado" };
-      }
+      if (!email || !password || !name) return { success: false, error: "Todos los campos son obligatorios" };
+      if (password.length < 4) return { success: false, error: "La contraseña debe tener al menos 4 caracteres" };
+      if (users.some((u) => u.email === email)) return { success: false, error: "Este correo ya está registrado" };
 
       const newUser: User = {
         id: `user-${Date.now()}`,
@@ -237,24 +192,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         createdAt: new Date().toISOString().slice(0, 10),
       };
 
-      // Try Supabase first
       if (_supabaseReady === true) {
         try {
-          const { error } = await supabase
-            .from("users")
-            .insert(userToRow(newUser));
-          if (error) throw error;
-
-          const updatedUsers = [...users, newUser];
-          setUsers(updatedUsers);
-          setItem(USERS_KEY, updatedUsers);
-          return { success: true };
-        } catch {
-          _supabaseReady = false;
-        }
+          const client = getSupabaseClient();
+          if (client) {
+            const { error } = await client.from("users").insert(userToRow(newUser));
+            if (error) throw error;
+          }
+        } catch { _supabaseReady = false; }
       }
 
-      // Fallback to localStorage
       const updatedUsers = [...users, newUser];
       setUsers(updatedUsers);
       setItem(USERS_KEY, updatedUsers);
@@ -267,25 +214,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (userId: string) => {
       if (currentUser?.id === userId) return;
 
-      // Try Supabase first
       if (_supabaseReady === true) {
         try {
-          const { error } = await supabase
-            .from("users")
-            .delete()
-            .eq("id", userId);
-          if (error) throw error;
-
-          const updatedUsers = users.filter((u) => u.id !== userId);
-          setUsers(updatedUsers);
-          setItem(USERS_KEY, updatedUsers);
-          return;
-        } catch {
-          _supabaseReady = false;
-        }
+          const client = getSupabaseClient();
+          if (client) {
+            const { error } = await client.from("users").delete().eq("id", userId);
+            if (error) throw error;
+          }
+        } catch { _supabaseReady = false; }
       }
 
-      // Fallback to localStorage
       const updatedUsers = users.filter((u) => u.id !== userId);
       setUsers(updatedUsers);
       setItem(USERS_KEY, updatedUsers);
@@ -295,16 +233,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{
-        currentUser,
-        isAuthenticated: !!currentUser,
-        login,
-        logout,
-        register,
-        users,
-        deleteUser,
-        loading,
-      }}
+      value={{ currentUser, isAuthenticated: !!currentUser, login, logout, register, users, deleteUser, loading }}
     >
       {children}
     </AuthContext.Provider>
@@ -313,8 +242,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth(): AuthContextType {
   const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error("useAuth debe usarse dentro de un AuthProvider");
-  }
+  if (context === undefined) throw new Error("useAuth debe usarse dentro de un AuthProvider");
   return context;
 }
