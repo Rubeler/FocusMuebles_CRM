@@ -111,15 +111,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (sessionInitialized.current) return;
     sessionInitialized.current = true;
-    const id = requestAnimationFrame(async () => {
+    const id = requestAnimationFrame(() => {
       seedAdmin();
       const stored = getItem<User | null>(CURRENT_USER_KEY, null);
       if (stored) {
         setCurrentUser(stored);
       }
-      // Check Supabase status in background
-      checkAuthSupabaseStatus();
-      setLoading(false);
+      // Check Supabase status in background (non-blocking)
+      checkAuthSupabaseStatus().catch(() => { _supabaseReady = false; });
+      // Always set loading to false quickly
+      setTimeout(() => setLoading(false), 500);
     });
     return () => cancelAnimationFrame(id);
   }, [isClient]);
