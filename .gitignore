@@ -1,0 +1,11 @@
+node_modules/
+.next/
+.env*
+!.env.example
+bun.lock
+dev.log
+server.log
+package-lock.json
+db/
+*.db
+prisma/
