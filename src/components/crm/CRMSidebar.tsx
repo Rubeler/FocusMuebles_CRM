@@ -9,17 +9,19 @@ import {
   CalendarDays,
   Settings,
   LogOut,
+  UserPlus,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { getWorkshopName, getWorkshopLogo } from "@/lib/store";
 
-export type CRMTab = "dashboard" | "pipeline" | "clientes" | "calendario" | "config";
+export type CRMTab = "dashboard" | "pipeline" | "clientes" | "calendario" | "interesados" | "config";
 
 const menuItems: { id: CRMTab; label: string; icon: typeof LayoutDashboard; path: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, path: "/crm" },
   { id: "pipeline", label: "Pipeline", icon: Kanban, path: "/crm/pipeline" },
   { id: "clientes", label: "Clientes", icon: Users, path: "/crm/clientes" },
   { id: "calendario", label: "Calendario", icon: CalendarDays, path: "/crm/calendario" },
+  { id: "interesados", label: "Interesados", icon: UserPlus, path: "/crm/interesados" },
   { id: "config", label: "Configuración", icon: Settings, path: "/crm/config" },
 ];
 
